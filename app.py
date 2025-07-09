@@ -127,9 +127,13 @@ col1, col2, col3 = st.columns(3)
 with col1:
     if st.button("🟥 莊 (B)"):
         st.session_state.history.append("B")
+        if can_predict:
+            pred_label, pred_conf = ml_predict(st.session_state.history)
+        else:
+            pred_label, pred_conf = "N/A", 0
         c.execute(
             "INSERT INTO records (result, predict, confidence, profit, created) VALUES (?, ?, ?, ?, ?)",
-            ("B", pred_label if can_predict else "N/A", pred_conf if can_predict else 0, 0, datetime.datetime.now())
+            ("B", pred_label, pred_conf, 0, datetime.datetime.now())
         )
         conn.commit()
         st.experimental_rerun()
@@ -137,9 +141,13 @@ with col1:
 with col2:
     if st.button("🟦 閒 (P)"):
         st.session_state.history.append("P")
+        if can_predict:
+            pred_label, pred_conf = ml_predict(st.session_state.history)
+        else:
+            pred_label, pred_conf = "N/A", 0
         c.execute(
             "INSERT INTO records (result, predict, confidence, profit, created) VALUES (?, ?, ?, ?, ?)",
-            ("P", pred_label if can_predict else "N/A", pred_conf if can_predict else 0, 0, datetime.datetime.now())
+            ("P", pred_label, pred_conf, 0, datetime.datetime.now())
         )
         conn.commit()
         st.experimental_rerun()
@@ -147,9 +155,13 @@ with col2:
 with col3:
     if st.button("🟩 和 (T)"):
         st.session_state.history.append("T")
+        if can_predict:
+            pred_label, pred_conf = ml_predict(st.session_state.history)
+        else:
+            pred_label, pred_conf = "N/A", 0
         c.execute(
             "INSERT INTO records (result, predict, confidence, profit, created) VALUES (?, ?, ?, ?, ?)",
-            ("T", pred_label if can_predict else "N/A", pred_conf if can_predict else 0, 0, datetime.datetime.now())
+            ("T", pred_label, pred_conf, 0, datetime.datetime.now())
         )
         conn.commit()
         st.experimental_rerun()
