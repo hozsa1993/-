@@ -101,7 +101,7 @@ def ml_predict(history):
     if len(history) < N:
         return "觀望", 0.0
     recent = history[-N:]
-    code_map = {'B':1, 'P':0, 'T':0}  # T 用0當預設
+    code_map = {'B':1, 'P':0, 'T':0}  # 和牌當預設0
     recent_codes = [code_map.get(x, 0) for x in recent]
     pred_code = model.predict([recent_codes])[0]
     pred_prob = max(model.predict_proba([recent_codes])[0])
@@ -123,25 +123,34 @@ else:
 # ===== 輸入本局結果 =====
 st.subheader("🎮 輸入本局結果")
 col1, col2, col3 = st.columns(3)
+
 with col1:
     if st.button("🟥 莊 (B)"):
         st.session_state.history.append("B")
-        c.execute("INSERT INTO records (result, predict, confidence, profit, created) VALUES (?, ?, ?, ?, ?)",
-                  ("B", pred_label if can_predict else "N/A", pred_conf if can_predict else 0, 0, datetime.datetime.now()))
+        c.execute(
+            "INSERT INTO records (result, predict, confidence, profit, created) VALUES (?, ?, ?, ?, ?)",
+            ("B", pred_label if can_predict else "N/A", pred_conf if can_predict else 0, 0, datetime.datetime.now())
+        )
         conn.commit()
         st.experimental_rerun()
+
 with col2:
     if st.button("🟦 閒 (P)"):
         st.session_state.history.append("P")
-        c.execute("INSERT INTO records (result, predict, confidence, profit, created) VALUES (?, ?, ?, ?, ?)",
-                  ("P", pred_label if can_predict else "N/A", pred_conf if can_predict else 0, 0, datetime.datetime.now()))
+        c.execute(
+            "INSERT INTO records (result, predict, confidence, profit, created) VALUES (?, ?, ?, ?, ?)",
+            ("P", pred_label if can_predict else "N/A", pred_conf if can_predict else 0, 0, datetime.datetime.now())
+        )
         conn.commit()
         st.experimental_rerun()
+
 with col3:
     if st.button("🟩 和 (T)"):
         st.session_state.history.append("T")
-        c.execute("INSERT INTO records (result, predict, confidence, profit, created) VALUES (?, ?, ?, ?, ?)",
-                  ("T", pred_label if can_predict else "N/A", pred_conf if can_predict else 0, 0, datetime.datetime.now()))
+        c.execute(
+            "INSERT INTO records (result, predict, confidence, profit, created) VALUES (?, ?, ?, ?, ?)",
+            ("T", pred_label if can_predict else "N/A", pred_conf if can_predict else 0, 0, datetime.datetime.now())
+        )
         conn.commit()
         st.experimental_rerun()
 
@@ -155,32 +164,28 @@ if st.session_state.current_bet < 1:
     st.session_state.current_bet = st.session_state.base_bet
 
 # ===== 勝負紀錄與下注金額調整 =====
-def win_adjust():
-    st.session_state.profit += st.session_state.current_bet
-    st.session_state.wins += 1
-    st.session_state.total += 1
-    if strategy == "馬丁格爾":
-        st.session_state.current_bet = st.session_state.base_bet
-    elif strategy == "反馬丁格爾":
-        st.session_state.current_bet = min(st.session_state.current_bet * 2, 10000)
-
-def lose_adjust():
-    st.session_state.profit -= st.session_state.current_bet
-    st.session_state.total += 1
-    if strategy == "馬丁格爾":
-        st.session_state.current_bet = st.session_state.current_bet * 2
-    elif strategy == "反馬丁格爾":
-        st.session_state.current_bet = max(st.session_state.current_bet // 2, 1)
-
 st.subheader(f"💰 勝負紀錄 (目前下注金額: {st.session_state.current_bet} 元)")
 col4, col5 = st.columns(2)
+
 with col4:
     if st.button("✅ 勝利"):
-        win_adjust()
+        st.session_state.profit += st.session_state.current_bet
+        st.session_state.wins += 1
+        st.session_state.total += 1
+        if strategy == "馬丁格爾":
+            st.session_state.current_bet = st.session_state.base_bet
+        elif strategy == "反馬丁格爾":
+            st.session_state.current_bet = min(st.session_state.current_bet * 2, 10000)
         st.experimental_rerun()
+
 with col5:
     if st.button("❌ 失敗"):
-        lose_adjust()
+        st.session_state.profit -= st.session_state.current_bet
+        st.session_state.total += 1
+        if strategy == "馬丁格爾":
+            st.session_state.current_bet *= 2
+        elif strategy == "反馬丁格爾":
+            st.session_state.current_bet = max(st.session_state.current_bet // 2, 1)
         st.experimental_rerun()
 
 st.success(f"總獲利：{st.session_state.profit} 元 ｜ 勝場：{st.session_state.wins} ｜ 總場：{st.session_state.total}")
@@ -215,3 +220,4 @@ st.download_button(
 )
 
 st.caption("© 2025 🎲 AI 百家樂預測系統 | 機器學習版本 | 激活碼保護")
+
