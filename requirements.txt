@@ -1,4 +1,6 @@
-matplotlib
-pandas
 streamlit
+pandas
+numpy
+matplotlib
 xlsxwriter
+scikit-learn
