@@ -1,56 +1,17 @@
-import os
-import time
-import datetime
-import threading
 import streamlit as st
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 import sqlite3
+import datetime
 import io
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import train_test_split
 
-# === 自動重啟設定 ===
-ENABLE_WATCHDOG = False  # 若想啟用檔案變動重啟，改成 True 並安裝 watchdog
-
-def daily_reload(hour=4):
-    while True:
-        now = datetime.datetime.now()
-        target = now.replace(hour=hour, minute=0, second=0, microsecond=0)
-        if now > target:
-            target += datetime.timedelta(days=1)
-        sleep_seconds = (target - now).total_seconds()
-        print(f"[{datetime.datetime.now()}] 等待 {sleep_seconds:.0f} 秒，將於 {target} 重啟程式")
-        time.sleep(sleep_seconds)
-        print(f"[{datetime.datetime.now()}] 到達重啟時間，程式即將退出...")
-        os._exit(0)
-
-threading.Thread(target=daily_reload, daemon=True).start()
-
-if ENABLE_WATCHDOG:
-    try:
-        from watchdog.observers import Observer
-        from watchdog.events import FileSystemEventHandler
-    except ImportError:
-        print("請先安裝 watchdog 模組: pip install watchdog")
-        ENABLE_WATCHDOG = False
-
-if ENABLE_WATCHDOG:
-    class ReloadOnChangeHandler(FileSystemEventHandler):
-        def on_modified(self, event):
-            print(f"[{datetime.datetime.now()}] 檔案異動，程式即將退出...")
-            os._exit(0)
-
-    observer = Observer()
-    observer.schedule(ReloadOnChangeHandler(), path='.', recursive=True)
-    observer.daemon = True
-    observer.start()
-    print(f"[{datetime.datetime.now()}] watchdog 監控已啟動，檔案異動將觸發重啟")
-
-# ===== Streamlit 頁面設定 =====
+# ===== 頁面設定 =====
 st.set_page_config(page_title="🎲 AI 百家樂 ML 預測系統 🎲", page_icon="🎰", layout="wide")
 
+# ===== 自訂 CSS 深色主題與按鈕 =====
 st.markdown("""
 <style>
 body, .main {
@@ -209,7 +170,7 @@ def insert_result(result):
     )
     conn.commit()
     st.session_state.history.append(result)
-    st.experimental.runtime.rerun()
+    st.experimental_rerun()  # ← 改用 st.experimental_rerun()
 
 with col1:
     if st.button("🟥 莊 (B)"):
@@ -275,11 +236,10 @@ def auto_bet(pred_label, pred_prob):
         st.session_state.auto_bet = False
         return "已停止下注"
     now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    pred_result_code = 'B' if pred_label == '莊' else 'P'
     c.execute("INSERT INTO records (result, predict, confidence, profit, created) VALUES (?, ?, ?, ?, ?)",
-              (pred_result_code, pred_label, float(pred_prob), 0, now_str))
+              (pred_label[0], pred_label, float(pred_prob), 0, now_str))
     conn.commit()
-    st.session_state.history.append(pred_result_code)
+    st.session_state.history.append(pred_label[0])
     return f"已自動下注：{pred_label}"
 
 if auto_bet_flag and can_predict:
@@ -298,13 +258,14 @@ with col4:
         st.session_state.wins += 1
         st.session_state.total += 1
         apply_bet_adjustment(True)
-        st.experimental.runtime.rerun()
+        st.experimental_rerun()  # ← 這裡也改成 st.experimental_rerun()
+
 with col5:
     if st.button("❌ 失敗", help="點擊表示本局失敗，下注金額將依策略調整"):
         st.session_state.profit -= st.session_state.current_bet
         st.session_state.total += 1
         apply_bet_adjustment(False)
-        st.experimental.runtime.rerun()
+        st.experimental_rerun()  # ← 同上
 
 st.success(f"總獲利：{st.session_state.profit} 元 ｜ 勝場：{st.session_state.wins} ｜ 總場：{st.session_state.total}")
 
@@ -349,7 +310,7 @@ if st.session_state.is_admin:
             c.execute("DELETE FROM records")
             conn.commit()
             st.success("已清空資料庫")
-            st.experimental.runtime.rerun()
+            st.experimental_rerun()
 
         db_size_kb = conn.execute("PRAGMA page_count").fetchone()[0] * conn.execute("PRAGMA page_size").fetchone()[0] / 1024
         st.info(f"資料庫大小：約 {db_size_kb:.2f} KB")
@@ -358,4 +319,5 @@ if st.session_state.is_admin:
         st.download_button("下載完整資料 (CSV)", df_all.to_csv(index=False).encode('utf-8'), "baccarat_records.csv", "text/csv")
 
 st.caption("© 2025 🎲 AI 百家樂 ML 預測系統 | UI 美化優化版 | 含多激活碼、管理員、下注策略與自動下注功能")
+
 
