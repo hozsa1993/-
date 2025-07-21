@@ -209,7 +209,7 @@ def insert_result(result):
     )
     conn.commit()
     st.session_state.history.append(result)
-    st.experimental_rerun()
+    st.experimental.runtime.rerun()
 
 with col1:
     if st.button("🟥 莊 (B)"):
@@ -275,7 +275,6 @@ def auto_bet(pred_label, pred_prob):
         st.session_state.auto_bet = False
         return "已停止下注"
     now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    # 注意下注紀錄的 result 用 'B' 或 'P'，但 pred_label 是中文 '莊' or '閒'
     pred_result_code = 'B' if pred_label == '莊' else 'P'
     c.execute("INSERT INTO records (result, predict, confidence, profit, created) VALUES (?, ?, ?, ?, ?)",
               (pred_result_code, pred_label, float(pred_prob), 0, now_str))
@@ -299,13 +298,13 @@ with col4:
         st.session_state.wins += 1
         st.session_state.total += 1
         apply_bet_adjustment(True)
-        st.experimental_rerun()
+        st.experimental.runtime.rerun()
 with col5:
     if st.button("❌ 失敗", help="點擊表示本局失敗，下注金額將依策略調整"):
         st.session_state.profit -= st.session_state.current_bet
         st.session_state.total += 1
         apply_bet_adjustment(False)
-        st.experimental_rerun()
+        st.experimental.runtime.rerun()
 
 st.success(f"總獲利：{st.session_state.profit} 元 ｜ 勝場：{st.session_state.wins} ｜ 總場：{st.session_state.total}")
 
@@ -350,7 +349,7 @@ if st.session_state.is_admin:
             c.execute("DELETE FROM records")
             conn.commit()
             st.success("已清空資料庫")
-            st.experimental_rerun()
+            st.experimental.runtime.rerun()
 
         db_size_kb = conn.execute("PRAGMA page_count").fetchone()[0] * conn.execute("PRAGMA page_size").fetchone()[0] / 1024
         st.info(f"資料庫大小：約 {db_size_kb:.2f} KB")
@@ -359,7 +358,4 @@ if st.session_state.is_admin:
         st.download_button("下載完整資料 (CSV)", df_all.to_csv(index=False).encode('utf-8'), "baccarat_records.csv", "text/csv")
 
 st.caption("© 2025 🎲 AI 百家樂 ML 預測系統 | UI 美化優化版 | 含多激活碼、管理員、下注策略與自動下注功能")
-
-
-
 
