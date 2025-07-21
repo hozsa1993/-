@@ -1,15 +1,25 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
+import matplotlib.pyplot as plt
 import sqlite3
 import datetime
+import io
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import train_test_split
-import matplotlib.pyplot as plt
-import io
 
 # ===== 頁面設定 =====
 st.set_page_config(page_title="🎲 AI 百家樂 ML 預測系統 🎲", page_icon="🎰", layout="centered")
+
+# ===== 深色主題 CSS =====
+st.markdown("""
+<style>
+body, .main { background-color: #0f0f0f; color: #e0e0e0; }
+button[kind="primary"] { background-color: #FF6F61; color: white; border-radius: 8px; }
+hr { border-color: #333333; }
+@media (max-width: 768px) {.block-container { padding: 1rem; }}
+</style>
+""", unsafe_allow_html=True)
 
 # ===== 多組激活碼與管理員設定 =====
 ADMIN_PASSWORD = "admin999"
@@ -20,32 +30,35 @@ if "access_granted" not in st.session_state:
     st.session_state.is_admin = False
 
 if not st.session_state.access_granted:
-    password_input = st.text_input("輸入激活碼或管理員密碼", type="password")
-    if st.button("確認"):
+    st.markdown("<h1 style='text-align:center; color:#FF6F61;'>🔒 請輸入激活碼或管理員密碼以使用系統</h1>", unsafe_allow_html=True)
+    password_input = st.text_input("🔑 激活碼/管理員密碼", type="password", key="password_input")
+    if st.button("確認激活"):
         if password_input in PASSWORDS:
             st.session_state.access_granted = True
         elif password_input == ADMIN_PASSWORD:
             st.session_state.access_granted = True
             st.session_state.is_admin = True
         else:
-            st.error("密碼錯誤，請重試")
+            st.error("激活碼或密碼錯誤，請重新輸入")
     st.stop()
 
 # ===== 資料庫連線與初始化 =====
 conn = sqlite3.connect("baccarat.db", check_same_thread=False)
 c = conn.cursor()
-c.execute('''CREATE TABLE IF NOT EXISTS records (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    result TEXT,
-    predict TEXT,
-    confidence REAL,
-    profit INTEGER,
-    created TIMESTAMP
-)''')
+c.execute('''
+    CREATE TABLE IF NOT EXISTS records (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        result TEXT,
+        predict TEXT,
+        confidence REAL,
+        profit INTEGER,
+        created TIMESTAMP
+    )
+''')
 conn.commit()
 
-# ===== 初始化 session_state =====
-defaults = {
+# ===== Session 狀態初始化 =====
+for key, value in {
     "history": [],
     "profit": 0,
     "wins": 0,
@@ -55,47 +68,99 @@ defaults = {
     "auto_bet": False,
     "max_loss": -1000,
     "strategy": "固定下注"
-}
-for k, v in defaults.items():
-    if k not in st.session_state:
-        st.session_state[k] = v
+}.items():
+    if key not in st.session_state:
+        st.session_state[key] = value
 
-# ===== 讀取歷史資料 =====
+# ===== 讀取歷史資料並準備訓練資料 =====
 df = pd.read_sql_query("SELECT * FROM records ORDER BY created ASC", conn)
-df = df[df['result'].isin(['B', 'P', 'T'])].copy()
-df['result_code'] = df['result'].map({'B': 1, 'P': 0, 'T': 2})
+df = df[df['result'].isin(['B', 'P'])].copy()
+df['result_code'] = df['result'].map({'B': 1, 'P': 0})
 
 N = 5
+results = df['result_code'].values
 features, labels = [], []
-for i in range(len(df) - N):
-    features.append(df['result_code'].iloc[i:i + N])
-    labels.append(df['result_code'].iloc[i + N])
+for i in range(len(results) - N):
+    features.append(results[i:i + N])
+    labels.append(results[i + N])
 
 X, y = np.array(features), np.array(labels)
-
 model, accuracy, can_predict = None, None, False
 
-if len(X) >= 15:
+if len(X) >= 10:
     X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
     model = RandomForestClassifier(n_estimators=100, random_state=42)
     model.fit(X_train, y_train)
     accuracy = model.score(X_test, y_test)
     can_predict = True
 else:
-    st.warning("歷史資料不足，請先輸入至少 15 筆資料以啟用 ML 預測")
+    st.warning("歷史資料不足，無法訓練 ML 模型，請先輸入至少 15 筆莊閒結果。")
 
-# ===== ML 預測函數 =====
-def ml_predict():
-    if not can_predict or len(st.session_state.history) < N:
+def ml_predict(history):
+    if model is None or len(history) < N:
         return "觀望", 0.0
-    mapping = {'B': 1, 'P': 0, 'T': 2}
-    recent = [mapping.get(x, 0) for x in st.session_state.history[-N:]]
-    pred_code = model.predict([recent])[0]
-    prob = max(model.predict_proba([recent])[0])
-    pred_label = "莊" if pred_code == 1 else "閒" if pred_code == 0 else "和"
-    return pred_label, prob
+    code_map = {'B': 1, 'P': 0, 'T': 0}
+    recent_codes = [code_map.get(x, 0) for x in history[-N:]]
+    pred_code = model.predict([recent_codes])[0]
+    pred_prob = max(model.predict_proba([recent_codes])[0])
+    return ('莊' if pred_code == 1 else '閒'), pred_prob
 
-# ===== 下注策略函數 =====
+st.markdown("<h1 style='text-align:center; color:#FF6F61;'>🎲 AI 百家樂 ML 預測系統 🎲</h1>", unsafe_allow_html=True)
+st.divider()
+
+# 顯示預測
+if can_predict:
+    pred_label, pred_conf = ml_predict(st.session_state.history)
+    st.subheader(f"🔮 機器學習預測建議：{pred_label} (信心 {pred_conf:.2f})")
+    st.write(f"模型準確度（測試集）: {accuracy:.2%}")
+else:
+    st.subheader("🔮 預測：資料不足，無法進行 ML 預測")
+
+# 輸入本局結果
+st.subheader("🎮 輸入本局結果")
+col1, col2, col3 = st.columns(3)
+
+def insert_result(result):
+    pred_label, pred_conf = ml_predict(st.session_state.history) if can_predict else ("N/A", 0)
+    c.execute(
+        "INSERT INTO records (result, predict, confidence, profit, created) VALUES (?, ?, ?, ?, ?)",
+        (result, pred_label, pred_conf, 0, datetime.datetime.now().isoformat())
+    )
+    conn.commit()
+    st.session_state.history.append(result)
+    st.experimental_rerun()
+
+with col1:
+    if st.button("🟥 莊 (B)"):
+        insert_result("B")
+
+with col2:
+    if st.button("🟦 閒 (P)"):
+        insert_result("P")
+
+with col3:
+    if st.button("🟩 和 (T)"):
+        insert_result("T")
+
+# 下注策略設定
+strategy = st.radio("選擇下注策略", ["固定下注", "馬丁格爾", "反馬丁格爾"], index=["固定下注", "馬丁格爾", "反馬丁格爾"].index(st.session_state.strategy))
+st.session_state.strategy = strategy
+
+# 初始下注金額
+bet_input = st.number_input("設定初始下注金額", min_value=1, step=10, value=st.session_state.base_bet)
+st.session_state.base_bet = bet_input
+if st.session_state.current_bet < 1:
+    st.session_state.current_bet = st.session_state.base_bet
+
+# 最大虧損限制
+max_loss = st.number_input("當日最大虧損限制(負數)", value=st.session_state.get("max_loss", -1000))
+st.session_state.max_loss = max_loss
+
+# 自動下注開關
+auto_bet_flag = st.checkbox("啟用自動下注(信心閾值0.65)", value=st.session_state.auto_bet)
+st.session_state.auto_bet = auto_bet_flag
+
+# 下注策略調整下注金額函數
 def apply_bet_adjustment(win):
     strat = st.session_state.strategy
     if strat == "固定下注":
@@ -111,7 +176,6 @@ def apply_bet_adjustment(win):
         else:
             st.session_state.current_bet = st.session_state.base_bet
 
-# ===== 自動下注功能 =====
 def auto_bet(pred_label, pred_prob, threshold=0.65):
     if pred_prob < threshold:
         return "信心不足，暫不下注"
@@ -119,73 +183,17 @@ def auto_bet(pred_label, pred_prob, threshold=0.65):
         st.warning("已達最大虧損限制，停止自動下注")
         st.session_state.auto_bet = False
         return "已停止下注"
-    apply_bet_adjustment(True)  # 假設下注前為贏，實際需根據結果修正
+    # 這裡預設贏，但實際結果要用戶輸入後調整下注金額
     st.session_state.history.append(pred_label[0])
     c.execute("INSERT INTO records (result, predict, confidence, profit, created) VALUES (?, ?, ?, ?, ?)",
               (pred_label[0], pred_label, pred_prob, 0, datetime.datetime.now()))
     conn.commit()
     return f"已自動下注：{pred_label}"
 
-# ===== 頁面標題 =====
-st.title("🎲 AI 百家樂 ML 預測系統 🎲")
-
-# 顯示預測
-if can_predict:
-    pred_label, pred_prob = ml_predict()
-    st.subheader(f"預測結果：{pred_label} (信心 {pred_prob:.2f})")
-    st.write(f"模型準確度：{accuracy:.2%}")
-else:
-    st.info("尚無法進行預測")
-
-# 下注策略設定
-strategy = st.selectbox("選擇下注策略", ["固定下注", "馬丁格爾", "反馬丁格爾"], index=["固定下注", "馬丁格爾", "反馬丁格爾"].index(st.session_state.strategy))
-st.session_state.strategy = strategy
-
-# 初始下注金額
-bet_input = st.number_input("設定初始下注金額", min_value=10, step=10, value=st.session_state.base_bet)
-st.session_state.base_bet = bet_input
-if st.session_state.current_bet < 1:
-    st.session_state.current_bet = bet_input
-
-# 最大虧損限制
-max_loss = st.number_input("當日最大虧損限制(負數)", value=st.session_state.max_loss)
-st.session_state.max_loss = max_loss
-
-# 自動下注開關
-auto_bet_flag = st.checkbox("啟用自動下注(信心閾值0.65)", value=st.session_state.auto_bet)
-st.session_state.auto_bet = auto_bet_flag
-
 if auto_bet_flag and can_predict:
+    pred_label, pred_prob = ml_predict(st.session_state.history)
     result_msg = auto_bet(pred_label, pred_prob)
     st.success(result_msg)
-
-# 手動輸入本局結果
-st.subheader("🎮 輸入本局結果")
-col1, col2, col3 = st.columns(3)
-
-def insert_result(result):
-    pred_label_tmp, pred_prob_tmp = ml_predict() if can_predict else ("N/A", 0)
-    c.execute(
-        "INSERT INTO records (result, predict, confidence, profit, created) VALUES (?, ?, ?, ?, ?)",
-        (result, pred_label_tmp, pred_prob_tmp, 0, datetime.datetime.now())
-    )
-    conn.commit()
-    st.session_state.history.append(result)
-
-with col1:
-    if st.button("🟥 莊 (B)"):
-        insert_result("B")
-        st.experimental_rerun()
-
-with col2:
-    if st.button("🟦 閒 (P)"):
-        insert_result("P")
-        st.experimental_rerun()
-
-with col3:
-    if st.button("🟩 和 (T)"):
-        insert_result("T")
-        st.experimental_rerun()
 
 # 勝負記錄與下注金額調整
 st.subheader(f"💰 勝負紀錄 (目前下注金額: {st.session_state.current_bet} 元)")
@@ -206,7 +214,7 @@ with col5:
         apply_bet_adjustment(False)
         st.experimental_rerun()
 
-st.info(f"總獲利：{st.session_state.profit} 元 ｜ 勝場：{st.session_state.wins} ｜ 總場：{st.session_state.total}")
+st.success(f"總獲利：{st.session_state.profit} 元 ｜ 勝場：{st.session_state.wins} ｜ 總場：{st.session_state.total}")
 
 # 近30局走勢圖
 st.subheader("📈 近 30 局走勢圖")
@@ -252,6 +260,7 @@ if st.session_state.is_admin:
     df_all = pd.read_sql_query("SELECT * FROM records", conn)
     st.download_button("下載完整資料 (CSV)", df_all.to_csv(index=False).encode('utf-8'), "baccarat_records.csv", "text/csv")
 
-st.caption("© 2025 🎲 AI 百家樂 ML 預測系統 | 完整整合版 | 含馬丁格爾與反馬丁格爾下注策略")
+st.caption("© 2025 🎲 AI 百家樂 ML 預測系統 | 完整整合版 | 含多激活碼、管理員、下注策略與自動下注功能")
+
 
 
