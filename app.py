@@ -1,17 +1,56 @@
+import os
+import time
+import datetime
+import threading
 import streamlit as st
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 import sqlite3
-import datetime
 import io
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import train_test_split
 
-# ===== 頁面設定 =====
+# === 自動重啟設定 ===
+ENABLE_WATCHDOG = False  # 若想啟用檔案變動重啟，改成 True 並安裝 watchdog
+
+def daily_reload(hour=4):
+    while True:
+        now = datetime.datetime.now()
+        target = now.replace(hour=hour, minute=0, second=0, microsecond=0)
+        if now > target:
+            target += datetime.timedelta(days=1)
+        sleep_seconds = (target - now).total_seconds()
+        print(f"[{datetime.datetime.now()}] 等待 {sleep_seconds:.0f} 秒，將於 {target} 重啟程式")
+        time.sleep(sleep_seconds)
+        print(f"[{datetime.datetime.now()}] 到達重啟時間，程式即將退出...")
+        os._exit(0)
+
+threading.Thread(target=daily_reload, daemon=True).start()
+
+if ENABLE_WATCHDOG:
+    try:
+        from watchdog.observers import Observer
+        from watchdog.events import FileSystemEventHandler
+    except ImportError:
+        print("請先安裝 watchdog 模組: pip install watchdog")
+        ENABLE_WATCHDOG = False
+
+if ENABLE_WATCHDOG:
+    class ReloadOnChangeHandler(FileSystemEventHandler):
+        def on_modified(self, event):
+            print(f"[{datetime.datetime.now()}] 檔案異動，程式即將退出...")
+            os._exit(0)
+
+    observer = Observer()
+    observer.schedule(ReloadOnChangeHandler(), path='.', recursive=True)
+    observer.daemon = True
+    observer.start()
+    print(f"[{datetime.datetime.now()}] watchdog 監控已啟動，檔案異動將觸發重啟")
+
+# ===== Streamlit 頁面設定 =====
 st.set_page_config(page_title="🎲 AI 百家樂 ML 預測系統 🎲", page_icon="🎰", layout="wide")
 
-# ===== 自訂 CSS 深色主題與按鈕 =====
 st.markdown("""
 <style>
 body, .main {
@@ -141,15 +180,7 @@ def ml_predict(history):
 st.markdown("<h1 style='text-align:center; margin-top:0.5rem;'>🎲 AI 百家樂 ML 預測系統 🎲</h1>", unsafe_allow_html=True)
 st.markdown("<hr>")
 
-# ===== 停止自動下注按鈕 =====
-col_stop = st.columns([1])[0]
-if st.session_state.auto_bet:
-    if col_stop.button("⏹️ 停止自動下注"):
-        st.session_state.auto_bet = False
-        st.success("已停止自動下注")
-        st.experimental_rerun()
-
-# ===== 預測顯示區 =====
+# 預測顯示區
 with st.container():
     if can_predict:
         pred_label, pred_conf = ml_predict(st.session_state.history)
@@ -163,7 +194,7 @@ with st.container():
 
 st.markdown("<hr>")
 
-# ===== 輸入結果區 =====
+# 輸入結果區
 st.subheader("🎮 輸入本局結果")
 col1, col2, col3 = st.columns([1,1,1])
 
@@ -192,7 +223,7 @@ with col3:
 
 st.markdown("<hr>")
 
-# ===== 策略與下注設定 =====
+# 策略與下注設定
 st.subheader("🎯 下注策略與設定")
 strategy = st.radio("選擇下注策略", ["固定下注", "馬丁格爾", "反馬丁格爾"], index=["固定下注", "馬丁格爾", "反馬丁格爾"].index(st.session_state.strategy))
 st.session_state.strategy = strategy
@@ -216,11 +247,11 @@ st.session_state.confidence_threshold = confidence_threshold
 if st.session_state.current_bet < 1:
     st.session_state.current_bet = st.session_state.base_bet
 
-# ===== 自動下注開關 =====
+# 自動下注開關
 auto_bet_flag = st.checkbox("啟用自動下注", value=st.session_state.auto_bet)
 st.session_state.auto_bet = auto_bet_flag
 
-# ===== 下注策略調整下注金額函數 =====
+# 下注策略調整下注金額函數
 def apply_bet_adjustment(win):
     strat = st.session_state.strategy
     if strat == "固定下注":
@@ -236,7 +267,6 @@ def apply_bet_adjustment(win):
         else:
             st.session_state.current_bet = st.session_state.base_bet
 
-# ===== 自動下注函數（含資料庫新增） =====
 def auto_bet(pred_label, pred_prob):
     if pred_prob < st.session_state.confidence_threshold:
         return "信心不足，暫不下注"
@@ -244,13 +274,13 @@ def auto_bet(pred_label, pred_prob):
         st.warning("已達最大虧損限制，停止自動下注")
         st.session_state.auto_bet = False
         return "已停止下注"
-    label_map = {'莊': 'B', '閒': 'P'}
-    real_result = label_map.get(pred_label, 'P')
     now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    # 注意下注紀錄的 result 用 'B' 或 'P'，但 pred_label 是中文 '莊' or '閒'
+    pred_result_code = 'B' if pred_label == '莊' else 'P'
     c.execute("INSERT INTO records (result, predict, confidence, profit, created) VALUES (?, ?, ?, ?, ?)",
-              (real_result, pred_label, float(pred_prob), 0, now_str))
+              (pred_result_code, pred_label, float(pred_prob), 0, now_str))
     conn.commit()
-    st.session_state.history.append(real_result)
+    st.session_state.history.append(pred_result_code)
     return f"已自動下注：{pred_label}"
 
 if auto_bet_flag and can_predict:
@@ -260,31 +290,19 @@ if auto_bet_flag and can_predict:
 
 st.markdown("<hr>")
 
-# ===== 勝負記錄與下注金額調整 =====
+# 勝負記錄與下注金額調整
 st.subheader(f"💰 勝負紀錄 (目前下注金額: {st.session_state.current_bet} 元)")
-
-def update_last_record_profit(win):
-    c.execute("SELECT id, profit FROM records ORDER BY id DESC LIMIT 1")
-    row = c.fetchone()
-    if row:
-        record_id, old_profit = row
-        delta = st.session_state.current_bet if win else -st.session_state.current_bet
-        new_profit = old_profit + delta
-        c.execute("UPDATE records SET profit = ? WHERE id = ?", (new_profit, record_id))
-        conn.commit()
-        st.session_state.profit += delta
-
 col4, col5 = st.columns(2)
 with col4:
     if st.button("✅ 勝利", help="點擊表示本局勝利，下注金額將依策略調整"):
-        update_last_record_profit(True)
+        st.session_state.profit += st.session_state.current_bet
         st.session_state.wins += 1
         st.session_state.total += 1
         apply_bet_adjustment(True)
         st.experimental_rerun()
 with col5:
     if st.button("❌ 失敗", help="點擊表示本局失敗，下注金額將依策略調整"):
-        update_last_record_profit(False)
+        st.session_state.profit -= st.session_state.current_bet
         st.session_state.total += 1
         apply_bet_adjustment(False)
         st.experimental_rerun()
@@ -293,7 +311,7 @@ st.success(f"總獲利：{st.session_state.profit} 元 ｜ 勝場：{st.session_
 
 st.markdown("<hr>")
 
-# ===== 近30局走勢圖 =====
+# 近30局走勢圖
 st.subheader("📈 近 30 局走勢圖")
 if st.session_state.history:
     mapping = {"B": 1, "P": 0, "T": 0.5}
@@ -311,7 +329,7 @@ else:
 
 st.markdown("<hr>")
 
-# ===== 下載當日紀錄 Excel =====
+# 下載當日紀錄 Excel
 st.subheader("📥 下載當日紀錄 Excel")
 df_today = pd.read_sql_query("SELECT * FROM records WHERE date(created) = date('now')", conn)
 buffer = io.BytesIO()
@@ -325,7 +343,7 @@ st.download_button(
     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 )
 
-# ===== 管理員後台功能 =====
+# 管理員後台功能 (折疊面板)
 if st.session_state.is_admin:
     with st.expander("🛠️ 管理員後台", expanded=False):
         if st.button("清空資料庫"):
@@ -341,6 +359,7 @@ if st.session_state.is_admin:
         st.download_button("下載完整資料 (CSV)", df_all.to_csv(index=False).encode('utf-8'), "baccarat_records.csv", "text/csv")
 
 st.caption("© 2025 🎲 AI 百家樂 ML 預測系統 | UI 美化優化版 | 含多激活碼、管理員、下注策略與自動下注功能")
+
 
 
 
