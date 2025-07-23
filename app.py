@@ -90,6 +90,12 @@ if "strategy" not in st.session_state:
 if "current_bet" not in st.session_state:
     st.session_state.current_bet = st.session_state.bet_amount
 
+# === 輸入歷史局結果清理函式 ===
+def clean_history_input(raw_input):
+    items = [x.strip().upper() for x in raw_input.split(",")]
+    valid = [x for x in items if x in {"B", "P", "T"}]
+    return valid
+
 # === ML 多模型簡化示範：只用 RF 模型 ===
 def train_rf_model():
     df = pd.read_sql_query("SELECT * FROM records ORDER BY created ASC", conn)
@@ -119,57 +125,88 @@ def ml_predict(model, history):
     prob = max(model.predict_proba([recent])[0])
     return ("莊" if pred == 1 else "閒"), prob
 
-model, model_acc = train_rf_model()
-
 # === 頁面標題與預測 ===
+history_raw = st.text_area("輸入最近局結果 (B,P,T 以逗號分隔)").strip()
+history = clean_history_input(history_raw)
+
+# 初始化模型與準確度
+if "model" not in st.session_state:
+    model, model_acc = train_rf_model()
+    st.session_state.model = model
+    st.session_state.model_acc = model_acc
+else:
+    model = st.session_state.model
+    model_acc = st.session_state.model_acc
+
+if len(history) < 5:
+    st.warning("請至少輸入 5 局有效結果以供模型預測")
+    pred_label, pred_conf = "觀望", 0.0
+else:
+    pred_label, pred_conf = ml_predict(model, history)
+
 st.title(f"🎲 AI 百家樂 ML 預測系統 🎲 (RF 模型 準確度: {model_acc:.2%})")
 
-history = st.text_area("輸入最近局結果 (B,P,T 以逗號分隔)").strip().split(",")
-pred_label, pred_conf = ml_predict(model, history)
+# 重新訓練模型按鈕
+if st.button("🔄 重新訓練模型"):
+    model, model_acc = train_rf_model()
+    st.session_state.model = model
+    st.session_state.model_acc = model_acc
+    st.success(f"模型已重新訓練，準確度: {model_acc:.2%}")
 
-if st.button("🔮 預測下一局"):
-    if pred_conf < 0.6:
-        st.info(f"信心不足 ({pred_conf:.2f})，建議觀望")
-    else:
-        st.success(f"預測：{pred_label} (信心 {pred_conf:.2f})")
-    send_signal(f"🎲 預測：{pred_label} (信心 {pred_conf:.2f})")
-
-# === 自動下注與盈虧計算 ===
+# === 自動下注與盈虧計算 (三按鈕版本) ===
 st.subheader("🎯 自動下注與盈虧管理")
 bet_amount = st.number_input("每注金額", min_value=10, value=st.session_state.bet_amount)
 strategy = st.selectbox("選擇下注策略", ["固定下注", "馬丁格爾", "反馬丁格爾"], index=0)
 
-def calculate_profit(pred_label, bet_amount):
-    if pred_label == "莊":
-        return bet_amount * 0.95  # 抽水5%
-    elif pred_label == "閒":
-        return bet_amount
-    else:
-        return 0
+# 三按鈕選擇實際結果
+col1, col2, col3 = st.columns(3)
+clicked_b = col1.button("莊 (B)")
+clicked_p = col2.button("閒 (P)")
+clicked_t = col3.button("和 (T)")
 
-def update_bet_amount(strategy, last_profit):
+def calculate_profit_real(pred, actual, bet):
+    if actual == "T":
+        return 0
+    if pred == "莊" and actual == "B":
+        return bet * 0.95
+    elif pred == "閒" and actual == "P":
+        return bet
+    else:
+        return -bet
+
+def update_bet_amount(strategy, last_profit, base_bet):
     if strategy == "固定下注":
-        return bet_amount
+        return base_bet
     elif strategy == "馬丁格爾":
         if last_profit > 0:
-            return bet_amount
+            return base_bet
         else:
-            return min(bet_amount * 2, 100000)
+            return min(base_bet * 2, 100000)
     elif strategy == "反馬丁格爾":
         if last_profit > 0:
-            return min(bet_amount * 2, 100000)
+            return min(base_bet * 2, 100000)
         else:
-            return bet_amount
+            return base_bet
 
-if st.button("✅ 執行下注"):
-    profit = calculate_profit(pred_label, bet_amount)
+if clicked_b or clicked_p or clicked_t:
+    actual_result = "B" if clicked_b else ("P" if clicked_p else "T")
+    profit = calculate_profit_real(pred_label, actual_result, bet_amount)
     st.session_state.profit += profit
-    st.success(f"下注結果: {pred_label}, 本次盈虧: {profit}, 總盈虧: {st.session_state.profit}")
-    st.session_state.bet_amount = update_bet_amount(strategy, profit)
-    c.execute("INSERT INTO records (result, predict, confidence, bet_amount, profit, created) VALUES (?,?,?,?,?,?)",
-              ("待填", pred_label, pred_conf, bet_amount, profit, datetime.datetime.now()))
+    st.success(f"下注結果: 預測{pred_label}, 實際{actual_result}, 本次盈虧: {profit}, 總盈虧: {st.session_state.profit}")
+
+    st.session_state.bet_amount = update_bet_amount(strategy, profit, bet_amount)
+
+    c.execute(
+        "INSERT INTO records (result, predict, confidence, bet_amount, profit, created) VALUES (?,?,?,?,?,?)",
+        (actual_result, pred_label, pred_conf, bet_amount, profit, datetime.datetime.now()))
     conn.commit()
-    send_signal(f"已下注: {pred_label}, 金額: {bet_amount}, 盈虧: {profit}, 總盈虧: {st.session_state.profit}")
+
+    send_signal(f"已下注: 預測{pred_label}, 實際{actual_result}, 金額: {bet_amount}, 盈虧: {profit}, 總盈虧: {st.session_state.profit}")
+
+    # 自動重新訓練模型
+    model, model_acc = train_rf_model()
+    st.session_state.model = model
+    st.session_state.model_acc = model_acc
 
 # === 策略回測 ===
 st.subheader("📊 策略回測")
@@ -218,4 +255,3 @@ if st.session_state.is_admin:
         st.download_button("下載完整資料 CSV", csv, "baccarat_records.csv", "text/csv")
 
 st.caption("© 2025 🎲 AI 百家樂 ML 預測系統 | 完整整合版")
-
