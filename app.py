@@ -89,6 +89,8 @@ if "strategy" not in st.session_state:
     st.session_state.strategy = "固定下注"
 if "current_bet" not in st.session_state:
     st.session_state.current_bet = st.session_state.bet_amount
+if "history" not in st.session_state:
+    st.session_state.history = []
 
 # === ML 多模型簡化示範：只用 RF 模型 ===
 def train_rf_model():
@@ -110,21 +112,22 @@ def train_rf_model():
     accuracy = model.score(X_test, y_test)
     return model, accuracy
 
-def ml_predict(model, history):
+def ml_predict_probs(model, history):
     if model is None or len(history) < 5:
-        return "觀望", 0.0
+        return "觀望", 0.0, {"莊": 0.0, "閒": 0.0, "和": 0.0}
     code_map = {'B': 1, 'P': 0, 'T': 0}
     recent = [code_map.get(x.strip(), 0) for x in history[-5:]]
+    proba = model.predict_proba([recent])[0]
     pred = model.predict([recent])[0]
-    prob = max(model.predict_proba([recent])[0])
-    return ("莊" if pred == 1 else "閒"), prob
+    probs = {
+        "莊": proba[1],
+        "閒": proba[0],
+        "和": 0.0
+    }
+    return ("莊" if pred == 1 else "閒"), max(proba), probs
 
-# ===== 輸入歷史局結果改成按鈕累積 =====
-if "history" not in st.session_state:
-    st.session_state.history = []
-
+# === 輸入最近局結果（按鈕加入） ===
 st.subheader("輸入最近局結果（點按按鈕加入歷史）")
-
 col1, col2, col3, col4 = st.columns([1,1,1,1])
 if col1.button("莊 (B)", key="btn_history_b"):
     st.session_state.history.append("B")
@@ -136,10 +139,9 @@ if col4.button("清除歷史", key="btn_history_clear"):
     st.session_state.history = []
 
 st.write("目前歷史結果：", ", ".join(st.session_state.history))
-
 history = st.session_state.history
 
-# 初始化模型與準確度
+# === 模型初始化或載入 ===
 if "model" not in st.session_state:
     model, model_acc = train_rf_model()
     st.session_state.model = model
@@ -150,25 +152,27 @@ else:
 
 if len(history) < 5:
     st.warning("請至少輸入 5 局有效結果以供模型預測")
-    pred_label, pred_conf = "觀望", 0.0
+    pred_label, pred_conf, probs = "觀望", 0.0, {"莊":0, "閒":0, "和":0}
 else:
-    pred_label, pred_conf = ml_predict(model, history)
+    pred_label, pred_conf, probs = ml_predict_probs(model, history)
 
 st.title(f"🎲 AI 百家樂 ML 預測系統 🎲 (RF 模型 準確度: {model_acc:.2%})")
 
-# 重新訓練模型按鈕
-if st.button("🔄 重新訓練模型", key="btn_retrain_model"):
-    model, model_acc = train_rf_model()
-    st.session_state.model = model
-    st.session_state.model_acc = model_acc
-    st.success(f"模型已重新訓練，準確度: {model_acc:.2%}")
+st.markdown("### 預測機率")
+st.write(f"莊機率：{probs['莊']*100:.2f}%  |  閒機率：{probs['閒']*100:.2f}%  |  和機率：{probs['和']*100:.2f}%")
 
-# === 自動下注與盈虧計算 (三按鈕版本) ===
+if st.button("🔮 預測下一局", key="btn_predict"):
+    if pred_conf < 0.6:
+        st.info(f"信心不足 ({pred_conf:.2f})，建議觀望")
+    else:
+        st.success(f"預測：{pred_label} (信心 {pred_conf:.2f})")
+    send_signal(f"🎲 預測：{pred_label} (信心 {pred_conf:.2f})")
+
+# === 自動下注與盈虧計算（按鈕版） ===
 st.subheader("🎯 自動下注與盈虧管理")
 bet_amount = st.number_input("每注金額", min_value=10, value=st.session_state.bet_amount, key="num_bet_amount")
 strategy = st.selectbox("選擇下注策略", ["固定下注", "馬丁格爾", "反馬丁格爾"], index=0, key="select_strategy")
 
-# 三按鈕選擇實際結果
 col1, col2, col3 = st.columns(3)
 clicked_b = col1.button("莊 (B)", key="btn_execute_bet_b")
 clicked_p = col2.button("閒 (P)", key="btn_execute_bet_p")
@@ -253,7 +257,7 @@ if uploaded_file:
     fig = backtest_strategy(df, strategy)
     st.pyplot(fig)
 
-# === 走勢圖 (新增) ===
+# === 走勢圖 (預測信心度 & 累積盈虧) ===
 def plot_trends(df):
     import matplotlib.ticker as ticker
 
@@ -300,4 +304,5 @@ if st.session_state.is_admin:
         st.download_button("下載完整資料 CSV", csv, "baccarat_records.csv", "text/csv")
 
 st.caption("© 2025 🎲 AI 百家樂 ML 預測系統 | 完整整合版")
+
 
