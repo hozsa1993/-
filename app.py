@@ -90,12 +90,6 @@ if "strategy" not in st.session_state:
 if "current_bet" not in st.session_state:
     st.session_state.current_bet = st.session_state.bet_amount
 
-# === 輸入歷史局結果清理函式 ===
-def clean_history_input(raw_input):
-    items = [x.strip().upper() for x in raw_input.split(",")]
-    valid = [x for x in items if x in {"B", "P", "T"}]
-    return valid
-
 # === ML 多模型簡化示範：只用 RF 模型 ===
 def train_rf_model():
     df = pd.read_sql_query("SELECT * FROM records ORDER BY created ASC", conn)
@@ -125,9 +119,25 @@ def ml_predict(model, history):
     prob = max(model.predict_proba([recent])[0])
     return ("莊" if pred == 1 else "閒"), prob
 
-# === 頁面標題與預測 ===
-history_raw = st.text_area("輸入最近局結果 (B,P,T 以逗號分隔)").strip()
-history = clean_history_input(history_raw)
+# ===== 輸入歷史局結果改成按鈕累積 =====
+if "history" not in st.session_state:
+    st.session_state.history = []
+
+st.subheader("輸入最近局結果（點按按鈕加入歷史）")
+
+col1, col2, col3, col4 = st.columns([1,1,1,1])
+if col1.button("莊 (B)"):
+    st.session_state.history.append("B")
+if col2.button("閒 (P)"):
+    st.session_state.history.append("P")
+if col3.button("和 (T)"):
+    st.session_state.history.append("T")
+if col4.button("清除歷史"):
+    st.session_state.history = []
+
+st.write("目前歷史結果：", ", ".join(st.session_state.history))
+
+history = st.session_state.history
 
 # 初始化模型與準確度
 if "model" not in st.session_state:
@@ -242,6 +252,41 @@ if uploaded_file:
     df = pd.read_csv(uploaded_file)
     fig = backtest_strategy(df, strategy)
     st.pyplot(fig)
+
+# === 走勢圖 (新增) ===
+def plot_trends(df):
+    import matplotlib.ticker as ticker
+
+    if df.empty:
+        st.info("無歷史資料，無法繪製走勢圖")
+        return
+
+    df = df.sort_values('created').reset_index(drop=True)
+    df['cumulative_profit'] = df['profit'].cumsum()
+    df['predict_conf'] = df['confidence']
+
+    fig, ax1 = plt.subplots(figsize=(12, 5))
+
+    ax1.set_xlabel("局數")
+    ax1.set_ylabel("預測信心度", color='tab:blue')
+    ax1.plot(df.index + 1, df['predict_conf'], label="預測信心度", color='tab:blue', marker='o')
+    ax1.tick_params(axis='y', labelcolor='tab:blue')
+    ax1.set_ylim(0, 1.05)
+    ax1.yaxis.set_major_formatter(ticker.PercentFormatter(1.0))
+
+    ax2 = ax1.twinx()
+    ax2.set_ylabel("累積盈虧", color='tab:red')
+    ax2.plot(df.index + 1, df['cumulative_profit'], label="累積盈虧", color='tab:red', marker='x')
+    ax2.tick_params(axis='y', labelcolor='tab:red')
+
+    fig.suptitle("預測信心度與累積盈虧走勢圖")
+    fig.tight_layout()
+    st.pyplot(fig)
+
+st.subheader("📈 走勢圖 (預測信心度 & 累積盈虧)")
+
+df_records = pd.read_sql_query("SELECT * FROM records ORDER BY created ASC", conn)
+plot_trends(df_records)
 
 # === 管理員後台 ===
 if st.session_state.is_admin:
