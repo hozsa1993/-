@@ -21,8 +21,8 @@ if "access_granted" not in st.session_state:
 
 if not st.session_state.access_granted:
     st.title("🔒 請輸入激活碼或管理員密碼")
-    password_input = st.text_input("輸入激活碼/管理員密碼", type="password")
-    if st.button("確認"):
+    password_input = st.text_input("輸入激活碼/管理員密碼", type="password", key="input_password")
+    if st.button("確認", key="btn_confirm_password"):
         if password_input in PASSWORDS:
             st.session_state.access_granted = True
         elif password_input == ADMIN_PASSWORD:
@@ -126,13 +126,13 @@ if "history" not in st.session_state:
 st.subheader("輸入最近局結果（點按按鈕加入歷史）")
 
 col1, col2, col3, col4 = st.columns([1,1,1,1])
-if col1.button("莊 (B)"):
+if col1.button("莊 (B)", key="btn_history_b"):
     st.session_state.history.append("B")
-if col2.button("閒 (P)"):
+if col2.button("閒 (P)", key="btn_history_p"):
     st.session_state.history.append("P")
-if col3.button("和 (T)"):
+if col3.button("和 (T)", key="btn_history_t"):
     st.session_state.history.append("T")
-if col4.button("清除歷史"):
+if col4.button("清除歷史", key="btn_history_clear"):
     st.session_state.history = []
 
 st.write("目前歷史結果：", ", ".join(st.session_state.history))
@@ -157,7 +157,7 @@ else:
 st.title(f"🎲 AI 百家樂 ML 預測系統 🎲 (RF 模型 準確度: {model_acc:.2%})")
 
 # 重新訓練模型按鈕
-if st.button("🔄 重新訓練模型"):
+if st.button("🔄 重新訓練模型", key="btn_retrain_model"):
     model, model_acc = train_rf_model()
     st.session_state.model = model
     st.session_state.model_acc = model_acc
@@ -165,14 +165,14 @@ if st.button("🔄 重新訓練模型"):
 
 # === 自動下注與盈虧計算 (三按鈕版本) ===
 st.subheader("🎯 自動下注與盈虧管理")
-bet_amount = st.number_input("每注金額", min_value=10, value=st.session_state.bet_amount)
-strategy = st.selectbox("選擇下注策略", ["固定下注", "馬丁格爾", "反馬丁格爾"], index=0)
+bet_amount = st.number_input("每注金額", min_value=10, value=st.session_state.bet_amount, key="num_bet_amount")
+strategy = st.selectbox("選擇下注策略", ["固定下注", "馬丁格爾", "反馬丁格爾"], index=0, key="select_strategy")
 
 # 三按鈕選擇實際結果
 col1, col2, col3 = st.columns(3)
-clicked_b = col1.button("莊 (B)")
-clicked_p = col2.button("閒 (P)")
-clicked_t = col3.button("和 (T)")
+clicked_b = col1.button("莊 (B)", key="btn_execute_bet_b")
+clicked_p = col2.button("閒 (P)", key="btn_execute_bet_p")
+clicked_t = col3.button("和 (T)", key="btn_execute_bet_t")
 
 def calculate_profit_real(pred, actual, bet):
     if actual == "T":
@@ -220,7 +220,7 @@ if clicked_b or clicked_p or clicked_t:
 
 # === 策略回測 ===
 st.subheader("📊 策略回測")
-uploaded_file = st.file_uploader("上傳CSV檔進行回測")
+uploaded_file = st.file_uploader("上傳CSV檔進行回測", key="file_uploader")
 def backtest_strategy(df, strategy):
     df = df.copy()
     df['cumulative_profit'] = 0
@@ -291,7 +291,7 @@ plot_trends(df_records)
 # === 管理員後台 ===
 if st.session_state.is_admin:
     with st.expander("🛠️ 管理員後台"):
-        if st.button("清空資料庫"):
+        if st.button("清空資料庫", key="btn_clear_db"):
             c.execute("DELETE FROM records")
             conn.commit()
             st.success("資料庫已清空")
@@ -300,3 +300,4 @@ if st.session_state.is_admin:
         st.download_button("下載完整資料 CSV", csv, "baccarat_records.csv", "text/csv")
 
 st.caption("© 2025 🎲 AI 百家樂 ML 預測系統 | 完整整合版")
+
