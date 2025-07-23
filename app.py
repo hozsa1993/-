@@ -6,7 +6,6 @@ import sqlite3
 import datetime
 import threading
 import os
-import requests
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import train_test_split
 
@@ -46,7 +45,7 @@ def daily_reload(hour=4):
 threading.Thread(target=daily_reload, daemon=True).start()
 
 # === 頁面設定 ===
-st.set_page_config(page_title="🎲 AI 百家樂 ML 預測系統 強化版 🎲", page_icon="🎰", layout="wide")
+st.set_page_config(page_title="🎲 AI 百家樂 ML 預測系統", page_icon="🎰", layout="wide")
 
 # === 資料庫初始化 ===
 conn = sqlite3.connect("baccarat.db", check_same_thread=False)
@@ -62,46 +61,30 @@ c.execute('''CREATE TABLE IF NOT EXISTS records (
 )''')
 conn.commit()
 
-# === Telegram 推播設定（選填）===
-TELEGRAM_BOT_TOKEN = "YOUR_TELEGRAM_BOT_TOKEN"
-TELEGRAM_CHAT_ID = "YOUR_TELEGRAM_CHAT_ID"
+# === Session 狀態初始化 ===
+if "history" not in st.session_state:
+    st.session_state.history = []  # 用來存最近輸入的局結果 ['B','P','T']
 
-def send_signal(message):
-    if TELEGRAM_BOT_TOKEN == "YOUR_TELEGRAM_BOT_TOKEN" or TELEGRAM_CHAT_ID == "YOUR_TELEGRAM_CHAT_ID":
-        print(f"[模擬推播] {message}")
-        return
-    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-    data = {"chat_id": TELEGRAM_CHAT_ID, "text": message}
-    try:
-        response = requests.post(url, data=data)
-        if response.status_code != 200:
-            print(f"[推播錯誤] {response.text}")
-    except Exception as e:
-        print(f"[推播例外] {e}")
+if "model" not in st.session_state:
+    st.session_state.model = None
+    st.session_state.model_acc = 0.0
 
-# === Session 狀態初始值 ===
 if "profit" not in st.session_state:
-    st.session_state.profit = 0
+    st.session_state.profit = 0.0
+
 if "bet_amount" not in st.session_state:
     st.session_state.bet_amount = 100
+
 if "strategy" not in st.session_state:
     st.session_state.strategy = "固定下注"
-if "current_bet" not in st.session_state:
-    st.session_state.current_bet = st.session_state.bet_amount
 
-if "history" not in st.session_state:
-    st.session_state.history = []  # 用於存儲歷史輸入結果 ['B','P','T']
-
-# === 特徵工程函數 ===
+# === 特徵工程 ===
 def extract_features(results, N=5):
     features = []
     labels = []
     for i in range(N, len(results)):
         window = results[i-N:i]
         label = results[i]
-        # 基本序列特徵：過去N局結果
-        base = list(window)
-        # 新增統計特徵：莊、閒、和 出現次數與比例
         count_b = window.count(2)
         count_p = window.count(1)
         count_t = window.count(0)
@@ -123,35 +106,33 @@ def extract_features(results, N=5):
         max_consec_p = max_consecutive(window, 1)
         max_consec_t = max_consecutive(window, 0)
 
-        feat = base + [count_b, count_p, count_t, prop_b, prop_p, prop_t,
-                      max_consec_b, max_consec_p, max_consec_t]
+        feat = list(window) + [count_b, count_p, count_t, prop_b, prop_p, prop_t,
+                              max_consec_b, max_consec_p, max_consec_t]
         features.append(feat)
         labels.append(label)
     return np.array(features), np.array(labels)
 
 # === 訓練模型 ===
-def train_rf_model_enhanced():
-    df = pd.read_sql_query("SELECT * FROM records ORDER BY created ASC", conn)
-    df = df[df['result'].isin(['B', 'P', 'T'])].copy()
+def train_model():
+    df = pd.read_sql_query("SELECT * FROM records WHERE result IN ('B','P','T') ORDER BY created ASC", conn)
     if len(df) < 30:
         return None, 0.0
     code_map = {'T':0, 'P':1, 'B':2}
-    df['result_code'] = df['result'].map(code_map)
-    results = df['result_code'].tolist()
+    df['code'] = df['result'].map(code_map)
+    results = df['code'].tolist()
 
     N = 5
     X, y = extract_features(results, N)
     X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
-
     model = RandomForestClassifier(n_estimators=150, max_depth=10, random_state=42)
     model.fit(X_train, y_train)
-    accuracy = model.score(X_test, y_test)
-    return model, accuracy
+    acc = model.score(X_test, y_test)
+    return model, acc
 
 # === 預測函數 ===
-def ml_predict_probs_enhanced(model, history):
+def predict_next(model, history):
     if model is None or len(history) < 5:
-        return "觀望", 0.0, {"莊": 0.0, "閒": 0.0, "和": 0.0}
+        return "觀望", 0.0, {"莊":0.0,"閒":0.0,"和":0.0}
     code_map = {'T':0, 'P':1, 'B':2}
     recent = [code_map.get(x.strip(), 0) for x in history[-5:]]
 
@@ -176,12 +157,13 @@ def ml_predict_probs_enhanced(model, history):
     max_consec_p = max_consecutive(recent, 1)
     max_consec_t = max_consecutive(recent, 0)
 
-    feat = recent + [count_b, count_p, count_t, prop_b, prop_p, prop_t,
-                    max_consec_b, max_consec_p, max_consec_t]
+    feat = list(recent) + [count_b, count_p, count_t, prop_b, prop_p, prop_t,
+                          max_consec_b, max_consec_p, max_consec_t]
 
     proba = model.predict_proba([feat])[0]
     pred_idx = model.predict([feat])[0]
-    label_map = {0: "和", 1: "閒", 2: "莊"}
+
+    label_map = {0:"和", 1:"閒", 2:"莊"}
     probs = {
         "莊": proba[2],
         "閒": proba[1],
@@ -189,55 +171,49 @@ def ml_predict_probs_enhanced(model, history):
     }
     return label_map[pred_idx], max(proba), probs
 
-# === 載入模型 ===
-model, model_acc = train_rf_model_enhanced()
+# === 主頁面 ===
+st.title("🎲 AI 百家樂 ML 預測系統")
 
-# === 頁面標題 ===
-st.title(f"🎲 AI 百家樂 ML 預測系統 強化版 🎲 (準確度: {model_acc:.2%})")
-
-# === 歷史走勢與輸入按鈕 ===
-st.subheader("📈 歷史走勢輸入")
-
+# 輸入歷史結果按鈕
+st.subheader("輸入最近局結果")
 col1, col2, col3 = st.columns(3)
+if col1.button("莊 (B)"):
+    st.session_state.history.append("B")
+if col2.button("閒 (P)"):
+    st.session_state.history.append("P")
+if col3.button("和 (T)"):
+    st.session_state.history.append("T")
 
-with col1:
-    if st.button("莊 (B)"):
-        st.session_state.history.append('B')
-with col2:
-    if st.button("閒 (P)"):
-        st.session_state.history.append('P')
-with col3:
-    if st.button("和 (T)"):
-        st.session_state.history.append('T')
+# 顯示歷史結果
+st.write("最近輸入結果（最多50筆）:", ", ".join(st.session_state.history[-50:]))
 
-# 顯示目前歷史記錄（最新50筆）
-history_display = st.session_state.history[-50:]
-st.write("最近結果:", ", ".join(history_display))
+# 模型訓練與預測
+if st.session_state.model is None:
+    st.info("模型尚未訓練，請先按下方「重新訓練模型」按鈕")
+else:
+    pred_label, pred_conf, pred_probs = predict_next(st.session_state.model, st.session_state.history)
+    st.subheader("🔮 預測下一局")
+    st.write(f"預測結果：**{pred_label}**，信心度：{pred_conf:.2%}")
+    st.write(f"莊: {pred_probs['莊']:.2%} | 閒: {pred_probs['閒']:.2%} | 和: {pred_probs['和']:.2%}")
 
-# === 預測結果 ===
-pred_label, pred_conf, pred_probs = ml_predict_probs_enhanced(model, st.session_state.history)
+if st.button("重新訓練模型"):
+    with st.spinner("模型訓練中..."):
+        model, acc = train_model()
+        if model:
+            st.session_state.model = model
+            st.session_state.model_acc = acc
+            st.success(f"模型訓練完成，準確度：{acc:.2%}")
+        else:
+            st.warning("資料不足，至少需要30筆資料才能訓練模型")
 
-st.subheader("🔮 預測下一局結果")
-st.write(f"預測結果：**{pred_label}**，信心度：{pred_conf:.2%}")
-
-st.write("各類機率：")
-st.write(f"莊: {pred_probs['莊']:.2%} | 閒: {pred_probs['閒']:.2%} | 和: {pred_probs['和']:.2%}")
-
-# === 重新訓練模型按鈕 ===
-if st.button("🔄 重新訓練模型"):
-    with st.spinner("訓練中，請稍候..."):
-        model, model_acc = train_rf_model_enhanced()
-        st.success(f"模型重新訓練完成！準確度：{model_acc:.2%}")
-
-# === 自動下注與盈虧管理 ===
-st.subheader("🎯 自動下注與盈虧管理")
+# 下注金額及策略
+st.subheader("下注設定")
 bet_amount = st.number_input("每注金額", min_value=10, value=st.session_state.bet_amount)
-strategy = st.selectbox("選擇下注策略", ["固定下注", "馬丁格爾", "反馬丁格爾"], index=0)
+strategy = st.selectbox("下注策略", ["固定下注", "馬丁格爾", "反馬丁格爾"], index=0)
 
 def calculate_profit(pred_label, bet_amount):
-    # 模擬結果，真實要連動資料庫或實際結果
     if pred_label == "莊":
-        return bet_amount * 0.95  # 抽水5%
+        return bet_amount * 0.95
     elif pred_label == "閒":
         return bet_amount
     else:
@@ -257,33 +233,36 @@ def update_bet_amount(strategy, last_profit):
         else:
             return bet_amount
 
-if st.button("✅ 執行下注"):
-    profit = calculate_profit(pred_label, bet_amount)
-    st.session_state.profit += profit
-    st.success(f"下注結果: {pred_label}, 本次盈虧: {profit}, 總盈虧: {st.session_state.profit}")
-    st.session_state.bet_amount = update_bet_amount(strategy, profit)
-    # 寫入資料庫，這裡暫用 "待填" 代表真實結果
-    c.execute("INSERT INTO records (result, predict, confidence, bet_amount, profit, created) VALUES (?,?,?,?,?,?)",
-              ("待填", pred_label, pred_conf, bet_amount, profit, datetime.datetime.now()))
-    conn.commit()
-    send_signal(f"已下注: {pred_label}, 金額: {bet_amount}, 盈虧: {profit}, 總盈虧: {st.session_state.profit}")
+if st.button("執行下注"):
+    if st.session_state.model is None:
+        st.error("模型未訓練，無法下注")
+    else:
+        pred_label, pred_conf, _ = predict_next(st.session_state.model, st.session_state.history)
+        profit = calculate_profit(pred_label, bet_amount)
+        st.session_state.profit += profit
+        st.session_state.bet_amount = update_bet_amount(strategy, profit)
+        st.success(f"下注結果：{pred_label}，本次盈虧：{profit}，累積盈虧：{st.session_state.profit}")
 
-# === 走勢圖顯示 ===
-st.subheader("📊 歷史結果走勢圖")
+        # 寫入資料庫，result 預設用「待填」
+        c.execute("INSERT INTO records (result, predict, confidence, bet_amount, profit, created) VALUES (?,?,?,?,?,?)",
+                  ("待填", pred_label, pred_conf, bet_amount, profit, datetime.datetime.now()))
+        conn.commit()
 
+# 歷史結果走勢圖
 if len(st.session_state.history) > 0:
+    st.subheader("歷史結果走勢圖")
     code_map = {'B': 2, 'P': 1, 'T': 0}
     history_nums = [code_map.get(x, 0) for x in st.session_state.history]
-    plt.figure(figsize=(12, 3))
+    plt.figure(figsize=(12,3))
     plt.plot(history_nums, marker='o')
     plt.yticks([0,1,2], ['和(T)', '閒(P)', '莊(B)'])
     plt.title("歷史結果走勢")
     plt.grid(True)
     st.pyplot(plt)
 
-# === 管理員後台 ===
+# 管理員功能
 if st.session_state.is_admin:
-    with st.expander("🛠️ 管理員後台"):
+    with st.expander("管理員後台"):
         if st.button("清空資料庫"):
             c.execute("DELETE FROM records")
             conn.commit()
@@ -292,5 +271,5 @@ if st.session_state.is_admin:
         csv = df_all.to_csv(index=False).encode('utf-8')
         st.download_button("下載完整資料 CSV", csv, "baccarat_records.csv", "text/csv")
 
-st.caption("© 2025 🎲 AI 百家樂 ML 預測系統 強化版 | 完整整合版")
+st.caption("© 2025 AI 百家樂 ML 預測系統")
 
