@@ -119,12 +119,38 @@ def ml_predict_probs(model, history):
     recent = [code_map.get(x.strip(), 0) for x in history[-5:]]
     proba = model.predict_proba([recent])[0]
     pred = model.predict([recent])[0]
+    st.write(f"輸入特徵：{recent}")
+    st.write(f"機率：莊 {proba[1]:.3f}, 閒 {proba[0]:.3f}")
     probs = {
         "莊": proba[1],
         "閒": proba[0],
         "和": 0.0
     }
     return ("莊" if pred == 1 else "閒"), max(proba), probs
+
+# === 顯示資料量與模型準確率 ===
+df_records = pd.read_sql_query("SELECT * FROM records ORDER BY created ASC", conn)
+
+if "model" not in st.session_state:
+    model, model_acc = train_rf_model()
+    st.session_state.model = model
+    st.session_state.model_acc = model_acc
+else:
+    model = st.session_state.model
+    model_acc = st.session_state.model_acc
+
+st.write(f"資料庫筆數: {len(df_records)}")
+if model is not None:
+    st.write(f"模型準確率: {model_acc:.2%}")
+else:
+    st.write("模型尚未訓練")
+
+# === 重新訓練模型按鈕 ===
+if st.button("重新訓練模型", key="btn_retrain"):
+    model, model_acc = train_rf_model()
+    st.session_state.model = model
+    st.session_state.model_acc = model_acc
+    st.success(f"模型重新訓練完成，準確率：{model_acc:.2%}")
 
 # === 輸入最近局結果（按鈕加入） ===
 st.subheader("輸入最近局結果（點按按鈕加入歷史）")
@@ -141,15 +167,7 @@ if col4.button("清除歷史", key="btn_history_clear"):
 st.write("目前歷史結果：", ", ".join(st.session_state.history))
 history = st.session_state.history
 
-# === 模型初始化或載入 ===
-if "model" not in st.session_state:
-    model, model_acc = train_rf_model()
-    st.session_state.model = model
-    st.session_state.model_acc = model_acc
-else:
-    model = st.session_state.model
-    model_acc = st.session_state.model_acc
-
+# === 預測流程 ===
 if len(history) < 5:
     st.warning("請至少輸入 5 局有效結果以供模型預測")
     pred_label, pred_conf, probs = "觀望", 0.0, {"莊":0, "閒":0, "和":0}
@@ -288,8 +306,6 @@ def plot_trends(df):
     st.pyplot(fig)
 
 st.subheader("📈 走勢圖 (預測信心度 & 累積盈虧)")
-
-df_records = pd.read_sql_query("SELECT * FROM records ORDER BY created ASC", conn)
 plot_trends(df_records)
 
 # === 管理員後台 ===
@@ -304,5 +320,6 @@ if st.session_state.is_admin:
         st.download_button("下載完整資料 CSV", csv, "baccarat_records.csv", "text/csv")
 
 st.caption("© 2025 🎲 AI 百家樂 ML 預測系統 | 完整整合版")
+
 
 
